@@ -10,7 +10,7 @@ The project was built in x86 host with across complier tool and has been tested 
 
 <center>Qualcomm® QCS610 SoC Open Kits</center>
 
-![charger](./res/QCS610.png.jpg )
+![QCS610](./res/QCS610.png )
 
 
 ## Materials and Tools used for the project
