@@ -1,0 +1,5 @@
+config {
+    model_path : "../models/helmet/output_tflite_graph_helmet.tflite"
+    runtime : GPU
+    data_format : NCHW 
+}
