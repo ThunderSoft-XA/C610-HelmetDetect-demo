@@ -52,6 +52,33 @@ void preview(cv::Mat& imgframe)
     return ;
 }
 
+//导向滤波器
+Mat guidedFilter(Mat &srcMat, Mat &guidedMat, int radius, double eps)
+{
+    //------------【0】转换源图像信息，将输入扩展为64位浮点型，以便以后做乘法------------
+    srcMat.convertTo(srcMat, CV_64FC1);
+    guidedMat.convertTo(guidedMat, CV_64FC1);
+    //--------------【1】各种均值计算----------------------------------
+    Mat mean_p, mean_I, mean_Ip, mean_II;
+    boxFilter(srcMat, mean_p, CV_64FC1, Size(radius, radius));//生成待滤波图像均值mean_p 
+    boxFilter(guidedMat, mean_I, CV_64FC1, Size(radius, radius));//生成引导图像均值mean_I   
+    boxFilter(srcMat.mul(guidedMat), mean_Ip, CV_64FC1, Size(radius, radius));//生成互相关均值mean_Ip
+    boxFilter(guidedMat.mul(guidedMat), mean_II, CV_64FC1, Size(radius, radius));//生成引导图像自相关均值mean_II
+    //--------------【2】计算相关系数，计算Ip的协方差cov和I的方差var------------------
+    Mat cov_Ip = mean_Ip - mean_I.mul(mean_p);
+    Mat var_I = mean_II - mean_I.mul(mean_I);
+    //---------------【3】计算参数系数a、b-------------------
+    Mat a = cov_Ip / (var_I + eps);
+    Mat b = mean_p - a.mul(mean_I);
+    //--------------【4】计算系数a、b的均值-----------------
+    Mat mean_a, mean_b;
+    boxFilter(a, mean_a, CV_64FC1, Size(radius, radius));
+    boxFilter(b, mean_b, CV_64FC1, Size(radius, radius));
+    //---------------【5】生成输出矩阵------------------
+    Mat dstImage = mean_a.mul(srcMat) + mean_b;
+    return dstImage;
+}
+
 void bodyInference()
 {
     std::cout << "enter body inference thread........" << std::endl; 
@@ -62,19 +89,39 @@ void bodyInference()
             }
 
             cv::Mat helmet_mat;
+            cv::Mat resultMat;  
             if ( false == gst_pipe_vec[0]->getFrameData(gst_pipe_vec[0],helmet_mat)) {
                 continue;
             }
+            vector<Mat> vSrcImage, vResultImage;
+            split(helmet_mat, vSrcImage);
+            for (int i = 0; i < 3; i++)
+            {
+                Mat tempImage;
+                vSrcImage[i].convertTo(tempImage, CV_64FC1, 1.0 / 255.0);//将分通道转换成浮点型数据
+                Mat cloneImage = tempImage.clone(); //将tempImage复制一份到cloneImage
+                Mat resultImage = guidedFilter(tempImage, cloneImage, 5, 0.01);//对分通道分别进行导向滤波，半径为1、3、5...等奇数
+                vResultImage.push_back(resultImage);//将分通道导向滤波后的结果存放到vResultImage中
+            }
+            merge(vResultImage, resultMat);
+            // cv::cvtColor(helmet_mat_source, helmet_mat,cv::COLOR_BGR2RGB);    helmet tflite model need BGR style
+            cv::Mat inputBlob;
+        //    blobFromImagesFromOpencv(helmet_mat,inputBlob, 1 , cv::Size(260, 260), cv::Scalar(0, 0, 0), false,false,CV_8U);
+            cv::Mat fact_mat;
+            // cvtColor(helmet_mat, inputBlob, COLOR_BGR2RGB);
+            cv::resize(resultMat,fact_mat,cv::Size(300,300),cv::INTER_LINEAR);
+            cv::normalize(fact_mat,inputBlob,0,255,cv::NORM_MINMAX);
+            // cv::convertScaleAbs(inputBlob,fact_mat,1.5,0);
             // helmet tflite model need BGR style
-            vector<uchar> helmet_mat_vec = convertMat2Vector<uchar>(helmet_mat);
-            ai_inference->loadTfliteData<uchar>(helmet_mat.rows,helmet_mat.cols,helmet_mat.channels(),helmet_mat_vec);
+            vector<uchar> helmet_mat_vec = convertMat2Vector<uchar>(inputBlob);
+            ai_inference->loadTfliteData<uchar>(helmet_mat_vec);
             std::vector<std::vector<float>> inference_result;
             ai_inference->doInference<float>(&inference_result);
             for(int idx = 0; idx < int(inference_result[3][0]); idx++) {
                 if(inference_result[1][idx] == 0.0) {
                     // helmet
                     cv::Scalar color;
-                    if( inference_result[2][idx] > 0.6) {
+                    if( inference_result[2][idx] > 0.5) {
                         color = cv::Scalar(0,255,0);
                         cv::putText(helmet_mat,SSTR("helmet"),
                                                 cv::Point2f(inference_result[0][idx * 4 + 1] * 640 + 10, inference_result[0][idx * 4] * 480  + 20),
